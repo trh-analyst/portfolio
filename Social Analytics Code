@@ -1,0 +1,198 @@
+#Tricia Hindley 
+#Title: Assignment 5 - Visualization of Text Analytics
+
+#packages ####
+install.packages("wordcloud")
+install.packages("wordcloud2")
+install.packages("dplyr")
+
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(dplyr)
+library(wordcloud)
+library(wordcloud2)
+
+
+#Task 1####
+
+# Open Corpus (excel file)
+tweets <- read_excel("AppleiPadiPhone_Full.xlsx", 
+                     sheet = "Edges"
+) %>%
+  as_tibble()
+
+#Clean data for visualization####
+
+#remove URLS
+tweets <- tweets %>%
+  mutate(Tweet = gsub("http[s]?://\\S+|www\\.\\S+", "", Tweet))
+
+#Make words lowercase and one token per line
+tidy_tweet_words <- tweets %>%
+  unnest_tokens(word, 
+                Tweet,
+                to_lower = TRUE)
+
+# Remove punctuation, and stopping words, rename column, keep top words
+word_counts <- tidy_tweet_words %>%
+  anti_join(stop_words) %>%
+  count(word) %>%
+  slice_max(n, n = 200)
+
+
+#STEP 4 Use wordcloud package to create a word cloud####
+#preview word counts
+word_counts
+
+#word cloud with basic R graphics
+word_counts %>%
+  with(wordcloud(word, n))
+
+#STEP 5 Use wordcloud2 package to create a word cloud####
+#word cloud with HTML5
+wordcloud2(word_counts)
+
+#Review word clouds/Remove unneccesary words using custom stop words dictionary
+#remove apple, iphone, ipad
+
+custom_stop_words <-data.frame(word = c("apple", "iphone", "ipad"), lexicon = "custom")
+
+word_counts <-tidy_tweet_words %>%
+  anti_join(stop_words) %>%
+  anti_join(custom_stop_words, by = "word")%>%
+  count(word) %>%
+  slice_max(n, n = 200)
+  
+#Recreate word clouds in steps 4 and 5####
+
+word_counts
+
+#STEP 4B####
+word_counts %>%
+  with(wordcloud(word, n))
+  
+#STEP5B
+wordcloud2(word_counts)
+
+#Task 2####
+
+#open new instance of corpus
+tweets <- read_excel("AppleiPadiPhone_Full_FreshInstance.xlsx", 
+                     sheet = "Edges"
+) %>%
+  as_tibble()
+
+
+#Clean data for visualization####
+
+#remove URLS
+tweets <- tweets %>%
+  mutate(Tweet = gsub("http[s]?://\\S+|www\\.\\S+", "", Tweet))
+
+#Make words lowercase and one token per line
+tidy_tweet_words <- tweets %>%
+  unnest_tokens(word, 
+                Tweet,
+                to_lower = TRUE)
+
+#Remove stop words, getting sentiments from bing dictionary  
+tidy_tweet_words <- tidy_tweet_words %>%
+  anti_join(stop_words)
+
+word_count <- tidy_tweet_words %>%
+  count(Linenumber)
+
+#determine postive and negative sentiment of each post
+
+#Remove stop words, getting sentiments from bing dictionary, add in total lines  
+tidy_tweet_sentiments <- tidy_tweet_words %>%
+  inner_join(get_sentiments("afinn")) %>%
+  inner_join(word_count) %>%
+  rename (total_lines = n)
+
+#Preview the results of the sentiments
+tidy_tweet_sentiments
+
+#structure dataset for visualization by date(not line number).
+#separately if needed
+tweets_score_sentiment <- tidy_tweet_sentiments %>%
+  group_by(Date, total_lines) %>%
+  summarise(Total_Sentiment = sum(value))
+
+tweets_score_sentiment <- tweets_score_sentiment %>%
+  mutate (Mean_Sentiment = Total_Sentiment/total_lines)
+
+#Preview tweets_score_sentiment
+tweets_score_sentiment
+
+# Graphing with ggplot ####
+#Step 5 Use ggplot2 to create a time series plot over the time of the dataset.###
+
+
+
+#Plotting single values in a scatter plot
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point()
+
+#use geometrically smoothed trend line (w. uncertainty) to illustrate trend of pos and neg sentiment
+#Add a smooting line, linear regression model
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", formula = y ~ x, linewidth = 1)
+
+#use a weighted aesthetic for pos and neg sentiments; 
+#add a smoothing line with locally weighted regression (you have to specify the window)
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point() + 
+  geom_smooth(method = "loess",span = 5, linewidth = 1)
+
+#Specify the confidence interval
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point() + 
+  geom_smooth(method = "loess",span = 5, level = .99, linewidth = 1)
+
+#Put it on auto. But be mindful to of the model it uses
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point() + 
+  geom_smooth(method = "auto", linewidth = 1)
+
+#Use hollow circles to clear out the visual
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point(shape = 1) + 
+  geom_smooth(method = "auto", linewidth = 1)
+
+#Use smaller points to clear out visual
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point(shape = ".") + 
+  geom_smooth(method = "auto", linewidth = 1)
+
+#Make the points more transparent
+ggplot(tweets_score_sentiment, aes(Date, Mean_Sentiment)) + 
+  geom_point(shape = 1, alpha = 1/3) + 
+  geom_smooth(method = "auto", linewidth = 1)
+
+
+#Provide well-formed labels and titles for components of visualization
+
+#Step 6 use ggplot2 to create additional visualization of your choice.####
+#ChatGPT was utilized to assist with Step 6####
+
+# Task 2 - Area Chart Creation
+# Ensure Date is in proper format
+tweets_score_sentiment <- tweets_score_sentiment %>%
+  mutate(Date = as.Date(Date))
+
+# Create the area chart
+ggplot(tweets_score_sentiment, aes(x = Date, y = Mean_Sentiment)) +
+  geom_area(fill = "blue", alpha = 0.5) +
+  labs(title = "Mean Tweet Sentiment Over Time",
+       x = "Date",
+       y = "Mean Sentiment Score") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))  # Format y-axis for better readability
+
+
+
+
+
