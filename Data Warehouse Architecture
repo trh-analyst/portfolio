@@ -1,0 +1,277 @@
+-- Databricks notebook source
+-- MAGIC %md
+-- MAGIC # Lab 5 Instructions
+-- MAGIC
+-- MAGIC ### Work as a team â€“ submit individually
+-- MAGIC
+-- MAGIC
+-- MAGIC - Create two new dimension tables from files
+-- MAGIC
+-- MAGIC   - dim_date
+-- MAGIC     - Data found here : 
+-- MAGIC       https://canvas.ou.edu/courses/365181/files/folder/Class%20Files/Module%205?preview=106936243
+-- MAGIC   - dim_county
+-- MAGIC     - Data found here: 
+-- MAGIC       https://canvas.ou.edu/courses/365181/files/folder/Class%20Files/Module%205?preview=106936206
+-- MAGIC       
+-- MAGIC     
+-- MAGIC
+-- MAGIC - Setup Bronze, Silver, Gold databases and flow all datasets through each layer
+-- MAGIC
+-- MAGIC - Create dimensional model in Gold database
+-- MAGIC
+-- MAGIC   - Fact_covid
+-- MAGIC
+-- MAGIC   - Dim_date
+-- MAGIC
+-- MAGIC   - Dim_county
+-- MAGIC
+-- MAGIC - The last 4 cells of your notebook should be
+-- MAGIC
+-- MAGIC   - SELECT * FROM gold.dim_county
+-- MAGIC
+-- MAGIC   - SELECT * FROM gold.dim_date
+-- MAGIC
+-- MAGIC   - SELECT * FROM fact_covid
+-- MAGIC   
+-- MAGIC   - A line graph showing the rolling 2 week average cases per 100k people (according to the 2019 population estimate) for Oklahoma County, OK (fips#40109) in 2022 
+-- MAGIC
+-- MAGIC - Publish the notebook and submit the link in the canvas assignment for Lab 5
+
+-- COMMAND ----------
+
+DROP SCHEMA IF EXISTS BRONZE CASCADE;
+DROP SCHEMA IF EXISTS SILVER CASCADE;
+DROP SCHEMA IF EXISTS GOLD CASCADE;
+
+-- COMMAND ----------
+
+CREATE DATABASE bronze;
+CREATE DATABASE silver;
+CREATE DATABASE gold;
+
+-- COMMAND ----------
+
+-- DBTITLE 1,CREATE Databases
+CREATE DATABASE IF NOT EXISTS bronze;
+CREATE DATABASE IF NOT EXISTS silver;
+CREATE DATABASE IF NOT EXISTS gold;
+
+-- COMMAND ----------
+
+-- MAGIC %md # Bronze
+
+-- COMMAND ----------
+
+-- MAGIC %py
+-- MAGIC #load us-counties.csv from NYT
+-- MAGIC import pandas as pd
+-- MAGIC df = pd.read_csv('https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2022.csv', dtype = 'str')
+-- MAGIC df0 = spark.createDataFrame(df)
+-- MAGIC df0.write.saveAsTable('bronze.covid', mode = 'overwrite')
+
+-- COMMAND ----------
+
+select * from bronze.covid
+
+-- COMMAND ----------
+
+SELECT DISTINCT
+county
+FROM
+bronze.covid
+WHERE 1=1
+AND state = "Oklahoma"
+AND county NOT IN ('Unknown')
+ORDER BY 
+county
+
+-- COMMAND ----------
+
+-- MAGIC %python
+-- MAGIC #read csv into spark dataframe
+-- MAGIC df = spark.read.csv("dbfs:/FileStore/tables/co_est2019_alldata.csv", header=True)
+-- MAGIC
+-- MAGIC #write df to bronze.county
+-- MAGIC df.write.saveAsTable('bronze.county', mode = 'overwrite')
+
+-- COMMAND ----------
+
+SELECT
+sum(popestimate2019)
+FROM
+bronze.county
+WHERE
+state = 40
+
+-- COMMAND ----------
+
+-- MAGIC %py
+-- MAGIC #read csv into spark dataframe
+-- MAGIC df = spark.read.csv("dbfs:/FileStore/tables/dim_date.csv", header=True)
+-- MAGIC
+-- MAGIC #write df to bronze.date
+-- MAGIC #df.write.saveAsTable('bronze.date', mode = 'overwrite')
+-- MAGIC df.write.option("mergeSchema", "True").saveAsTable('bronze.date', mode = 'overwrite')
+
+-- COMMAND ----------
+
+SELECT * FROM bronze.covid
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Add additional calculations
+CREATE OR REPLACE TEMP VIEW temp1
+AS
+SELECT
+  *,
+  --this is a window function. It splits the dataset up, orders and groups it by categories, and performs some function over the results
+  --http://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-window.html
+  LAG(cases) OVER (PARTITION BY fips ORDER BY date ASC) AS PreviousDayCases,
+  LAG(deaths) OVER (PARTITION BY fips ORDER BY date ASC) AS PreviousDayDeaths
+FROM
+  bronze.covid
+
+-- COMMAND ----------
+
+CREATE
+OR REPLACE TEMP VIEW temp2 AS
+SELECT
+  *,
+  cases - PreviousDayCases as NewCases,
+  deaths - PreviousDayDeaths as NewDeaths
+FROM
+  temp1
+
+-- COMMAND ----------
+
+-- MAGIC %md 
+-- MAGIC # Silver
+-- MAGIC
+-- MAGIC After adding calculations for NewCases, NewDeaths, Rolling2WeekAvgCases, Rolling2WeekAvgDeaths, save expanded table as silver.covid.
+
+-- COMMAND ----------
+
+-- DBTITLE 1,rolling 2 week average calculation over the cumulative cases
+-- you will need to calculate this over the "daily new cases" field that you create
+
+CREATE OR REPLACE TABLE silver.covid
+AS
+SELECT
+  *,
+  avg(NewCases) over (
+    partition by fips
+    order by
+      date ASC
+    rows between 13 PRECEDING and current row
+  ) as Rolling2WeekAvgCases,
+   avg(NewDeaths) over (
+    partition by fips
+    order by
+      date ASC
+    rows between 13 PRECEDING and current row
+  ) as Rolling2WeekAvgDeaths
+FROM
+  temp2
+
+-- COMMAND ----------
+
+
+--date
+CREATE OR REPLACE TABLE silver.date
+AS
+SELECT
+*,
+TO_DATE(full_date, 'M/d/yyy') formatted_date
+FROM
+bronze.date
+
+-- COMMAND ----------
+
+--county
+
+CREATE OR REPLACE TABLE silver.county
+AS
+SELECT
+concat(STATE, COUNTY) as FIPS,
+*
+FROM
+bronze.county
+
+
+-- COMMAND ----------
+
+-- MAGIC %md # Gold
+-- MAGIC
+-- MAGIC use the silver table to create the following tables in the gold database 
+-- MAGIC   - dim_date (date_key, date), 
+-- MAGIC   - dim_county (county_key, county, fips ,state), 
+-- MAGIC   - fact_covid (date_key, county_key, cases, deaths, NewCases, NewDeaths, Rolling2WeekAvgNewCases, Rolling2WeekAvgNewDeaths)
+
+-- COMMAND ----------
+
+CREATE OR REPLACE TABLE gold.dim_date AS
+SELECT
+*
+FROM silver.date
+
+
+
+-- COMMAND ----------
+
+CREATE OR REPLACE TABLE gold.dim_county
+AS
+SELECT
+monotonically_increasing_id() as county_key,
+*
+FROM
+silver.county
+
+-- COMMAND ----------
+
+CREATE OR REPLACE TABLE gold.fact_covid
+AS
+SELECT
+monotonically_increasing_id() as covid_key,
+co.cases,
+co.deaths,
+co.NewCases,
+co.NewDeaths,
+co.Rolling2WeekAvgCases,
+co.Rolling2WeekAvgDeaths,
+cty.county_key,
+da.date_key
+FROM silver.covid co
+LEFT JOIN gold.dim_county cty ON co.fips = cty.fips
+LEFT JOIN gold.dim_date da ON co.date = da.formatted_date
+
+-- COMMAND ----------
+
+-- MAGIC %md # Analysis
+
+-- COMMAND ----------
+
+SELECT * FROM
+gold.dim_county
+
+-- COMMAND ----------
+
+SELECT * FROM 
+gold.dim_date
+
+-- COMMAND ----------
+
+SELECT * FROM gold.fact_covid
+
+-- COMMAND ----------
+
+--line graph
+
+SELECT DAT.formatted_date as date,
+CTY.ctyname as county,
+(COV.Rolling2WeekAvgCases/CTY.popestimate2019) * 100000 as TwoWeekAvgCasesPer100k
+FROM
+gold.fact_covid COV
+LEFT JOIN gold.dim_county CTY ON COV.county_key = CTY.county_key
+LEFT JOIN gold.dim_date DAT ON COV.date_key = DAT.date_key
+WHERE CTY.FIPS = 40109
