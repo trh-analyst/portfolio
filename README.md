@@ -1,3 +1,5 @@
+README.md
+
 # Hi, I’m Tricia 👋
 
 This space showcases projects and work that reflect my background in **Business Analytics**, **systems support**, and **process improvement**, with a focus on using data and technology to solve real-world business problems.
